@@ -1,0 +1,236 @@
+---
+title: "Trabajo integrador DCSCyHD"
+author: "Catalina Zaza"
+date: "2023-05-28"
+output: 
+    prettydoc::html_pretty:
+      theme: hpstr
+      hightlight: github
+---
+
+Trabajo integrador Diplomatura en Ciencias Sociales Computacionales y Humanidades Digitales 2022-2023
+
+IDAES-UNSAM
+
+#INTRODUCCION:
+
+El objetivo de este trabajo es investigar las desigualdades salariales, sectoriales y territoriales en la Republica Argentina para el periodo historico 2014 - 2022.
+
+Para tal fin, utilizaremos los datos proporcionados por el Ministerio de Desarrollo Productivo de la Nacion Argentina, especificamente del portal de Datos Abiertos.Dentro de la API, hemos optado por trabajar con dos tipos de documentos: - Archivos CSV: bases de datos que proporcionan información sobre la totalidad de las relaciones laborales asalariadas registradas en la economía (incluyendo tanto al total de las empresas privadas como las empresas con participación estatal mayoritaria; además de abarcar a todo el sector público) - Archivos geojson: formato diseñado para representar información georeferenciada
+
+[Fuente: <https://datos.produccion.gob.ar/dataset/salarios-por-departamento-partido-y-sector-de-actividad>]
+
+Para más información, consultar el documento metodologico en: <https://datos.produccion.gob.ar/dataset/salarios-por-departamento-partido-y-sector-de-actividad/archivo/6b2fd420-48d1-4ca0-9326-e1f2d6b9f8d2>
+
+## 1. Representación geografica de los departamentos con mayores salarios del pais
+
+Con el objetivo de identificar los departamentos de Argentina con mayores salarios, en primer lugar procederemos a realizar un preprocesamiento de nuestras bases de datos eliminando los las variables que no tienen un fin especifico y modificando las que no son utiles con el objetivo de maniobrarlas de forma mas sencilla. Luego, calcularemos el promedio salarial para cada departamento, considerando todos los registros de la base para el mes de Enero del año 2022 (el ultimo registrado) para todos los sectores de actividad.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#descargar los paquetes para visualizar y manipular las bases de datos
+library(ggplot2)
+library(tidyverse)
+library(sf)
+library(openxlsx)
+library(viridis)
+library(viridisLite)
+library(dplyr)
+
+```
+
+```{r echo=TRUE}
+#descargar las bases de datos a utilizar provenientes de la API de la Secretaria
+departamentos <- read_sf("base/departamentos_arg.geojson")
+salarios <- read_csv("base/w_mean_depto_total_letra.csv")
+diccionarios_depto <- read.csv('base/diccionario_cod_depto.csv')
+diccionarios_clases <- read.csv('base/diccionario_clae2.csv')
+
+```
+
+```{r echo=TRUE}
+#creación de una mega base con toda la información disponible.
+base_completa <- salarios %>% 
+  left_join(diccionarios_depto) %>% 
+  left_join(diccionarios_clases)
+
+```
+
+```{r echo=TRUE}
+#pruebo las clases de las variables
+class(departamentos$codigo_departamento_indec) #character
+class(base_completa$codigo_departamento_indec) #numeric
+
+#como son 2 clases diferentes, las paso a una variable numerica para que sea posible unificar despues
+departamentos <- departamentos %>% 
+  mutate(codigo_departamento_indec = as.numeric(codigo_departamento_indec))
+
+```
+
+```{r echo=TRUE}
+#transformo y limpio mi base 
+base_completa <- base_completa %>% 
+  select(fecha, codigo_departamento_indec, w_mean) %>% #descarto las columnas que no utilizo
+  filter(!is.na(codigo_departamento_indec)) %>% #quito los NA
+  filter(fecha=="2022-11-01") %>% #me quedo con la fecha mas actual
+  group_by(codigo_departamento_indec) %>%  #agrupo
+  summarise(media = mean(w_mean)) #media de salarios por departamento
+```
+
+```{r echo=TRUE}
+#join de ambas bases
+map <- departamentos %>%
+  inner_join(base_completa) 
+```
+
+```{r echo=TRUE}
+options(scipen=999) #evita la notacion cientifica en el grafico
+
+#grafico
+ggplot(map) +
+  geom_sf(aes(fill = media), color = "black")+
+  scale_fill_viridis_c() +
+  labs(title = "Media salarial por departamentos en Argentina",
+       subtitle = "Datos de enero 2022",
+       fill = "Media salarial (expresada en pesos)", 
+       caption= "Elaboración propia en base al MDP, 2022",
+       tag= "Grafico 1") + 
+  theme_void()+
+  theme(plot.caption = element_text(hjust = -3))
+  
+```
+
+En el **grafico 1** podemos observar mediante un mapa cororopletico la division del salario en nuestro pais. Aquí, los salarios más altos (alrededor de 300.000 pesos) se concentran en la region patagonica del territorio, especificamente en las jurisdicciones comprendidas entre las provincias de Santa Cruz y Neuquén. Podemos inferir que esto se debe al desarrollo de actividades de explotación de yacimiento petroliferos y gasiferos, una actividad bien rentada en el país y de gran concentración de capital
+
+En contraposición, podemos ver de forma clara que los distritos situados en el Noroeste (pertenecientes a las provincias de Jujuy, Salta y norte de Tucuman) y Noreste (Chaco, Formosa y Misiones) tienden a una caida de la media salarial (un maximo aproximado de 100.000 pesos), lo que nos demuestra que los ingresos per capita son ampliamente menores a la zona sur del pais.
+
+Por ultimo, encontramos en la region centro-este de Argentina (en particular la provincia de Buenos Aires), sus distritos tambien se encuentran bien ponderados en terminos salariales. Nuevamente, podemos concluir que esto se debe a que Buenos Aires es la provincia con mayor densidad poblacional del pais y cuya producción supera en creces al resto de las regiones del suelo argentino.
+
+Cabe destacar que algunos distritos se encuentran en blanco dado que las bases utilizadas no contienen datos especificos de tales porciones del territorio
+
+## 2. Clasificación de los 5 sectores de actividad con salarios más bajos
+
+```{r echo=TRUE}
+#renombro la base que utilicé en el ejercicio anterior
+diccionario_clae <- read.csv("base/diccionario_clae2.csv")
+depto_letra <- read_csv("base/w_mean_depto_total_letra.csv") 
+```
+
+```{r echo=TRUE}
+#Join de letras de actividad con su descripcion
+sectores_actividad <- left_join(x=depto_letra, y=diccionario_clae) %>%
+  rename(sector_actividad=letra_desc) #cambio el nombre de la columna para que sea mas facil manipular
+```
+
+```{r echo=TRUE}
+sectores_actividad_bajos <- sectores_actividad%>% 
+  select("fecha", "codigo_departamento_indec", "id_provincia_indec", "letra", "w_mean", "sector_actividad") %>% #descarto las columnas a no utilizar
+  group_by(sector_actividad) %>%
+  summarise(media=mean(w_mean)) %>% #unifico los sectores de actividad
+  filter(!is.na(sector_actividad)) %>% #quito los NA
+  arrange(media) %>% #ordeno los valores
+  mutate(top_bajos=row_number()) %>% #creo un ranking
+  filter((top_bajos<=5)) %>% #me quedo con el top 5 de salarios mas bajos por sector
+  mutate(sector_actividad=case_when(sector_actividad==" SERVICIOS DE ALOJAMIENTO Y SERVICIOS DE COMIDA"~"ALOJAMIENTO Y COMIDA",
+                                  sector_actividad==" SERVICIOS INMOBILIARIOS"~sector_actividad,
+                                  sector_actividad==" ACTIVIDADES ADMINISTRATIVAS Y SERVICIOS DE APOYO"~"ACTIVIDADES ADMINISTRATIVAS",
+                                  sector_actividad==" SERVICIOS  ARTÍSTICOS, CULTURALES, DEPORTIVOS  Y DE ESPARCIMIENTO"~"DEPORTE Y CULTURA",
+                                  sector_actividad==" ENSEÑANZA"~sector_actividad)) #organizo las etiquetas de cada sector para que sea mas legible
+ 
+
+```
+
+```{r echo=TRUE}
+#Grafico
+ggplot(sectores_actividad_bajos, aes (x=fct_reorder(sector_actividad,top_bajos),
+                                      y=media, 
+                                      fill = factor(sector_actividad)))+ #ordeno los valores de menor a mayor
+  geom_col()+
+  geom_text(aes(label=round(media),
+                hjust = 0.5,
+                vjust = 0.9))+
+  theme_minimal()+
+  theme(axis.text.x=element_blank())+ 
+  theme(axis.text.y=element_blank())+#descarto el texto del eje x e y para que sea mas simple de visualizar 
+  labs(title="Salarios sectoriales mas bajos",
+       subtitle="Cobtabilizados en pesos argentinos. Año 2022",
+       fill="Sector de actividad",
+       x=NULL,
+       y="Salario promedio",
+       caption="Elaboración propia en base a datos del MDP, 2022",
+       tag= "Grafico 2")+
+  scale_fill_grey()+
+  theme(plot.caption = element_text(hjust = 4.5))
+```
+
+En relación a los hallazgos del **grafico 2**, hemos descubierto que los sectores con salarios mpas bajos son:
+
+-   Enseñanza
+-   Servicios inmobiliarios
+-   Actividades administrativas y servicios de apoyo
+-   Servicios de alojamiento y servicios de comida
+-   Servicios artisticos, culturales, deportivos y de esparcimiento
+
+Todos estos sectores comparten la particularidad de ser prestadores de servicios, es decir, ofrecen asistencia para satisfacer las necesidades de la población; no se producen o transforman bienes materiales.
+
+Cabe destacar del **grafico 2** que la media salarial no llega a superar los 32.000 pesos, mientras que la Canasta Basica Alimentaria para enero 2022 fue de 34.344 pesos según el INDEC: <https://www.indec.gob.ar/uploads/informesdeprensa/canasta_02_22C242CE6BB1.pdf>
+
+## Evolución de los salarios de 5 sectores de actividad por año
+
+```{r echo=TRUE}
+library(lubridate) #para maniobrar fechas
+```
+
+```{r}
+#primero calculo la media salarias mas alta de cada año registrado
+sectores_actividad_altos <- sectores_actividad %>%
+  mutate(anio = year(fecha)) %>%
+  group_by(anio, sector_actividad) %>% #agrupo por sector 
+  summarize(media = mean(w_mean, na.rm = TRUE)) %>% #quito los NA
+  group_by(anio) %>%
+  top_n(1, media)
+
+unique(sectores_actividad_altos$sector_actividad) 
+
+```
+
+```{r echo=TRUE}
+#vuelvo a utilizar mi base de datos "sectores_actividad"
+evolucion_salarios <- sectores_actividad %>% 
+  mutate(anio=year(fecha)) %>% #utilizo lubridate para extraer solo el año de cada fecha
+  filter(sector_actividad %in% c("EXPLOTACION DE MINAS Y CANTERAS", " SUMINISTRO DE ELECTRICIDAD, GAS, VAPOR Y AIRE ACONDICIONADO")) %>% 
+  group_by(anio, sector_actividad) %>% #agrupo por fecha y por letra
+  summarise(media=round(mean(w_mean, digits = 0))) %>% #hago la media por año y por sector
+  arrange(media) %>%  #ordeno en orden ascendente
+  filter(!is.na(sector_actividad)) %>% 
+  mutate (sector_actividad = case_when (sector_actividad == "EXPLOTACION DE MINAS Y CANTERAS" ~ "MINERIA Y PETROLEO",
+                                        sector_actividad == " SUMINISTRO DE ELECTRICIDAD, GAS, VAPOR Y AIRE ACONDICIONADO" ~ "GAS Y ENERGIA")) #cambio los nombres para que sea visible
+  
+
+
+```
+
+```{r}
+ggplot(evolucion_salarios, aes(x=anio, y=media, group=sector_actividad))+
+  geom_line(aes(color=sector_actividad))+
+  scale_color_manual(values=c("red", "blue"))+
+  theme_minimal()+
+  labs(title = "Evolución sectorial del salario en Argentina",
+       subtitle = "Sectores de produccion mejor rentados",
+       x = NULL, 
+       y = "media expresada en pesos",
+       color = "Sector de actividad: ",
+       caption = "Elaboración propia en base a datos del MDP, 2022",
+       tag= "grafico 3")+
+    theme(legend.position = "bottom")
+    
+    
+  
+
+```
+
+Por ultimo, podemos verificar con el **grafico 3** que los salarios de los 2 sectores mejor rentados aumentan de forma nominal en el periodo descrito. Empero, podemos adjudicar este crecimiento sostenido no a un aumento del salario real, sino más bien a un proceso inflacionario caracteristico de nuestro país. Por ende, el inrecmento salarial puede corresponderse a un ajuste por la inflación, y no a una recomposición salarial del sector.
+
+Asimismo, vemos que los sectores mejor remunerados son los de mineria y energia, llegando a un promedio salarial en 2022 de hasta 300.000 pesos; Podemos deducir cierta correlación entre este punto y el **grafico 1**, donde dijimos que los salarios más altos se concentraban en la region patagonica del país debido a las actividades mineras que están mejor remuneradas en comparación al resto de las actividades. También, podemos asignar parte de este crecimiento a la puesta en marcha del yacimiento Vaca Muerta en la provincia de Neuquén. A partir del 2021 (donde el grafico produce un alza en el salario) comienza el proceso de puesta en marcha para la extracción de petroleo y gas natural, más la creación de un gasoducto de gran envergadura que proporcionaría gas a todo el territorio nacional. Esto es probable que haya creado no solo un aumento de la capacidad productiva del sector, sino tambien una subida de la oferta salarial de sus empleadxs, como se puede observar en el grafico 3 a partir del año señalado.
+
+
